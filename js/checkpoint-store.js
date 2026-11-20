@@ -22,8 +22,9 @@ export async function segmentExists(jobId, index) {
   if (!opfsSupported()) return false;
   try {
     const directory = await jobDirectory(jobId);
-    await directory.getFileHandle(`segment-${String(index).padStart(5, "0")}.mp4`);
-    return true;
+    const handle = await directory.getFileHandle(`segment-${String(index).padStart(5, "0")}.mp4`);
+    const file = await handle.getFile();
+    return file.size > 1024;
   } catch {
     return false;
   }
@@ -45,5 +46,13 @@ export async function deleteJobFiles(jobId) {
   try {
     const root = await navigator.storage.getDirectory();
     await root.removeEntry(`litecompress-${jobId}`, { recursive: true });
+  } catch {}
+}
+
+export async function deleteSegment(jobId, index) {
+  if (!opfsSupported()) return;
+  try {
+    const directory = await jobDirectory(jobId);
+    await directory.removeEntry(`segment-${String(index).padStart(5, "0")}.mp4`);
   } catch {}
 }

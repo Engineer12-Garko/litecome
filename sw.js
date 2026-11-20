@@ -30,7 +30,11 @@ const APP_ASSETS = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_ASSETS)));
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await Promise.allSettled(APP_ASSETS.map((asset) => cache.add(asset)));
+    })
+  );
   self.skipWaiting();
 });
 
@@ -45,15 +49,12 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const network = fetch(event.request).then((response) => {
+    fetch(event.request).then((response) => {
         if (response.ok && new URL(event.request.url).origin === self.location.origin) {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         }
         return response;
-      }).catch(() => cached);
-      return cached || network;
-    })
+      }).catch(() => caches.match(event.request).then((cached) => cached || Response.error()))
   );
 });

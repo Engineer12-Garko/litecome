@@ -5,7 +5,7 @@ import { PreviewManager } from "./preview.js";
 import { presets } from "./presets.js";
 import { escapeHtml, formatBytes, safeOutputName, fingerprintFile, estimateOutputSize } from "./utils.js";
 import { deleteJob, getJobs, getSource, putJob, putSource, putHistory, getHistory } from "./persistence-store.js";
-import { deleteJobFiles, opfsSupported, segmentExists, writeSegment } from "./checkpoint-store.js";
+import { deleteJobFiles, opfsSupported, segmentExists, writeSegment, getSegment, deleteSegment } from "./checkpoint-store.js";
 
 const elements = {
   dropZone: document.querySelector("#dropZone"),
@@ -43,6 +43,7 @@ let elapsedEncodingMs = 0;
 let encodingStartedAt = 0;
 let historyResults = [];
 let pendingReselectId = null;
+const removedJobIds = new Set();
 
 function toast(message, type = "") {
   const item = document.createElement("div");
@@ -102,6 +103,9 @@ function serializeJob(job) {
     height: job.height,
     frameRate: job.frameRate,
     fingerprint: job.fingerprint,
+    sourceName: job.sourceName,
+    sourceSize: job.sourceSize,
+    sourceLastModified: job.sourceLastModified,
     presetKey: job.presetKey,
     preset: job.preset,
     segmentLength: job.segmentLength,
@@ -208,6 +212,7 @@ async function addFiles(files) {
             const savedId = pendingReselectId;
             const saved = (await getJobs()).find((entry) => entry.id === savedId);
             if (saved?.fingerprint && saved.fingerprint !== fingerprint) {
+              pendingReselectId = null;
               toast("The reselected file does not match the saved source.", "error");
               return null;
             }
@@ -237,6 +242,9 @@ async function addFiles(files) {
             outputBlob: null,
             error: null,
             fingerprint,
+            sourceName: file.name,
+            sourceSize: file.size,
+            sourceLastModified: file.lastModified,
             frameRate: null,
             presetKey,
             preset: { ...presets[presetKey] },
@@ -253,6 +261,7 @@ async function addFiles(files) {
             await putJob(serializeJob(job));
           } catch (error) {
             job.persistenceAvailable = false;
+            toast("This video could not be saved for interruption recovery.", "error");
           }
           return job;
         })
@@ -310,13 +319,16 @@ function renderAllJobs() {
   jobs.forEach(renderJob);
 }
 
-function removeJob(id) {
+async function removeJob(id) {
   const index = jobs.findIndex((job) => job.id === id);
   if (index < 0) return;
   const [job] = jobs.splice(index, 1);
+  removedJobIds.add(id);
   if (job.status === "processing") engine.cancel(id);
   if (job.outputUrl) URL.revokeObjectURL(job.outputUrl);
   preview.revoke(job.file);
+  await deleteJobFiles(id);
+  await deleteJob(id);
   if (!jobs.length) {
     elements.workspace.hidden = true;
   } else {
@@ -350,6 +362,7 @@ function closePreview() {
 }
 
 async function persistJobState(job) {
+  if (removedJobIds.has(job.id)) return;
   try {
     await putJob(serializeJob(job));
   } catch (error) {
@@ -375,11 +388,41 @@ function updateElapsedUi(job) {
     fps > 0 ? `Encoding ${fps.toFixed(1)}x realtime` : "Encoding calculating...";
   elements.batchEta.textContent =
     job.status === "processing"
-      ? `Batch ETA ${formatClock(remainingMs)}`
+      ? `Batch ETA ${formatClock(remainingMs * Math.max(1, jobs.filter((item) => item.status !== "complete").length))}`
       : "Batch ETA calculating...";
 }
 
+function validateOutputBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(url);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timeout = setTimeout(() => finish(new Error("The compressed output could not be validated.")), 10000);
+    video.onloadedmetadata = () => {
+      if (!video.videoWidth || !video.videoHeight || !Number.isFinite(video.duration) || video.duration <= 0) {
+        finish(new Error("The compressed output has invalid video metadata."));
+        return;
+      }
+      finish();
+    };
+    video.onerror = () => finish(new Error("The compressed output could not be decoded."));
+    video.src = url;
+  });
+}
+
 async function completeJob(job, result) {
+  await validateOutputBlob(result.blob);
   job.outputBlob = result.blob;
   job.outputSize = result.size;
   job.outputUrl = URL.createObjectURL(result.blob);
@@ -388,12 +431,14 @@ async function completeJob(job, result) {
   job.progress = 100;
   job.lastCheckpointAt = Date.now();
   await persistJobState(job);
-  putHistory(job.presetKey, {
-    key: `${job.presetKey}-${job.width || 0}x${job.height || 0}`,
-    preset: job.presetKey,
-    originalSize: job.originalSize,
-    outputSize: job.outputSize
-  });
+  try {
+    await putHistory(job.presetKey, {
+      key: `${job.presetKey}-${job.width || 0}x${job.height || 0}`,
+      preset: job.presetKey,
+      originalSize: job.originalSize,
+      outputSize: job.outputSize
+    });
+  } catch {}
   const estimate = estimateOutputSize(job.originalSize, job.duration, job.presetKey, [{
     preset: job.presetKey,
     originalSize: job.originalSize,
@@ -419,9 +464,9 @@ function failOrAbortJob(job, error) {
 }
 
 async function processJob(job, preset) {
+  if (removedJobIds.has(job.id)) return;
   job.status = "processing";
-  job.progress = 0;
-  job.presetKey = elements.presetSelect.value;
+  if (!job.presetKey) job.presetKey = elements.presetSelect.value;
   job.preset = { ...preset };
   encodingStartedAt = performance.now();
   renderJob(job);
@@ -450,11 +495,28 @@ async function processJob(job, preset) {
 
   try {
     const segmentStartMs = performance.now();
+    if (job.completedSegments.length) {
+      job.progress = Math.round((job.completedSegments.length / job.totalSegments) * 100);
+      renderJob(job);
+    } else {
+      job.progress = 0;
+    }
     for (let index = 0; index < job.totalSegments; index++) {
-      if (await segmentExists(job.id, index) && !job.completedSegments.includes(index)) {
-        job.completedSegments.push(index);
-        job.progress = Math.round((job.completedSegments.length / job.totalSegments) * 100);
-        await persistJobState(job);
+      if (await segmentExists(job.id, index)) {
+        const bytes = await getSegment(job.id, index);
+        try {
+          await validateOutputBlob(new Blob([bytes], { type: "video/mp4" }));
+          if (!job.completedSegments.includes(index)) {
+            job.completedSegments.push(index);
+            job.progress = Math.round((job.completedSegments.length / job.totalSegments) * 100);
+            await persistJobState(job);
+          }
+        } catch {
+          await deleteSegment(job.id, index);
+          const position = job.completedSegments.indexOf(index);
+          if (position >= 0) job.completedSegments.splice(position, 1);
+          await persistJobState(job);
+        }
       }
       if (job.completedSegments.includes(index)) continue;
       encodingStartedAt = performance.now();
@@ -484,6 +546,7 @@ async function processJob(job, preset) {
         }
       });
 
+      await validateOutputBlob(result.blob);
       await writeSegment(job.id, index, result.blob);
       if (!job.completedSegments.includes(index)) job.completedSegments.push(index);
       job.progress = Math.round((job.completedSegments.length / job.totalSegments) * 100);
@@ -517,6 +580,14 @@ async function startBatch() {
   elements.compressButton.querySelector("span").textContent = "Compressing...";
   elements.cancelButton.hidden = false;
   const batchPreset = { ...presets[elements.presetSelect.value] };
+  const batchPresetKey = elements.presetSelect.value;
+  jobs.forEach((job) => {
+    if (job.status !== "complete") {
+      job.presetKey = batchPresetKey;
+      job.preset = { ...batchPreset };
+      job.estimatedOutputSize = estimateOutputSize(job.originalSize, job.duration, batchPresetKey, historyResults);
+    }
+  });
   queue = new JobQueue((job) => processJob(job, batchPreset));
   queue.setJobs(jobs);
   await queue.run(renderJob);
@@ -551,6 +622,8 @@ async function loadSavedJobs() {
   elements.savedJobsList.innerHTML = saved.map((job) => {
     const status = job.status === "processing" ? "interrupted" : job.status;
     const completed = job.completedSegments?.length || 0;
+    const resumeLabel = status === "complete" ? "Completed" : "Resume";
+    const resumeDisabled = status === "complete" ? " disabled" : "";
     return `
       <article class="job-card saved-job" data-saved-id="${escapeHtml(job.id)}">
         <div class="job-info">
@@ -559,7 +632,7 @@ async function loadSavedJobs() {
           <div class="progress-track"><div class="progress-bar" style="width:${job.progress || 0}%"></div></div>
         </div>
         <div class="job-actions">
-          <button class="download-button resume-saved" type="button">Resume</button>
+          <button class="download-button resume-saved" type="button"${resumeDisabled}>${resumeLabel}</button>
           <button class="preview-button restart-saved" type="button">Restart</button>
           <button class="preview-button remove-saved" type="button">Remove</button>
         </div>
@@ -592,7 +665,11 @@ async function resumeSavedJob(id, restart = false) {
     return;
   }
   const fingerprint = await fingerprintFile(file);
-  if (saved.fingerprint && fingerprint !== saved.fingerprint) {
+  if (
+    (saved.fingerprint && fingerprint !== saved.fingerprint) ||
+    (saved.sourceSize && file.size !== saved.sourceSize) ||
+    (saved.sourceName && file.name !== saved.sourceName)
+  ) {
     toast("The reselected file does not match the saved source.", "error");
     return;
   }
@@ -642,10 +719,16 @@ async function startJob(job) {
 elements.clearButton.addEventListener("click", () => {
   queue?.stop();
   engine.terminate();
-  for (const job of jobs) {
+  const jobsToClear = [...jobs];
+  jobsToClear.forEach((job) => removedJobIds.add(job.id));
+  for (const job of jobsToClear) {
     preview.revoke(job.file);
     if (job.outputUrl) URL.revokeObjectURL(job.outputUrl);
   }
+  Promise.all(jobsToClear.map(async (job) => {
+    await deleteJobFiles(job.id);
+    await deleteJob(job.id);
+  })).catch(() => {});
   jobs.splice(0);
   elements.jobList.innerHTML = "";
   elements.workspace.hidden = true;
@@ -670,6 +753,12 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
+  jobs.forEach((job) => {
+    if (job.status === "processing" || job.status === "assembling") {
+      job.status = "interrupted";
+      if (!removedJobIds.has(job.id)) putJob(serializeJob(job)).catch(() => {});
+    }
+  });
   engine.terminate();
   preview.revokeAll(jobs.map((job) => job.file));
   jobs.forEach((job) => job.outputUrl && URL.revokeObjectURL(job.outputUrl));
