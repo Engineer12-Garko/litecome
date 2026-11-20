@@ -6,6 +6,8 @@ import { presets } from "./presets.js";
 import { escapeHtml, formatBytes, safeOutputName, fingerprintFile, estimateOutputSize } from "./utils.js";
 import { deleteJob, getJobs, getSource, putJob, putSource, putHistory, getHistory } from "./persistence-store.js";
 import { deleteJobFiles, opfsSupported, segmentExists, writeSegment, getSegment, deleteSegment } from "./checkpoint-store.js";
+import { ProcessingRouter } from "./processing-router.js";
+import { PerformanceMonitor } from "./performance-monitor.js";
 
 const elements = {
   dropZone: document.querySelector("#dropZone"),
@@ -31,11 +33,14 @@ const elements = {
   estimateRow: document.querySelector("#estimateRow"),
   estimateText: document.querySelector("#estimateText"),
   savedJobsSection: document.querySelector("#savedJobsSection"),
-  savedJobsList: document.querySelector("#savedJobsList")
+  savedJobsList: document.querySelector("#savedJobsList"),
+  engineStatus: document.querySelector("#engineStatus")
 };
 
 const preview = new PreviewManager();
 const engine = new CompressionEngine();
+const router = new ProcessingRouter(engine);
+const performanceMonitor = new PerformanceMonitor();
 const jobs = [];
 const inFlightFiles = new Set();
 let queue = null;
@@ -324,7 +329,7 @@ async function removeJob(id) {
   if (index < 0) return;
   const [job] = jobs.splice(index, 1);
   removedJobIds.add(id);
-  if (job.status === "processing") engine.cancel(id);
+  if (job.status === "processing") router.cancel(id);
   if (job.outputUrl) URL.revokeObjectURL(job.outputUrl);
   preview.revoke(job.file);
   await deleteJobFiles(id);
@@ -474,7 +479,8 @@ async function processJob(job, preset) {
 
   if (!opfsSupported() || !job.duration) {
     try {
-      const result = await engine.compress(job.file, preset, (message) => {
+      performanceMonitor.start("whole-compress");
+      const result = await router.compress(job.file, preset, (message) => {
         if (message.id !== job.id) return;
         if (message.type === "progress") {
           const nextProgress = Math.max(job.progress, Math.min(100, message.progress));
@@ -486,6 +492,7 @@ async function processJob(job, preset) {
         }
       });
       await completeJob(job, result);
+      performanceMonitor.end("whole-compress");
     } catch (error) {
       failOrAbortJob(job, error);
     }
@@ -527,7 +534,7 @@ async function processJob(job, preset) {
       job.status = "processing";
       await persistJobState(job);
 
-      const result = await engine.compressSegment(job.file, preset, {
+      const result = await router.compressSegment(job.file, preset, {
         id: segmentId,
         index,
         start,
@@ -560,7 +567,7 @@ async function processJob(job, preset) {
 
     job.status = "assembling";
     await persistJobState(job);
-    const assembled = await engine.assemble(job.id, job.totalSegments, () => {});
+    const assembled = await router.assemble(job.id, job.totalSegments, () => {});
     await completeJob(job, assembled);
   } catch (error) {
     failOrAbortJob(job, error);
@@ -718,7 +725,7 @@ async function startJob(job) {
 
 elements.clearButton.addEventListener("click", () => {
   queue?.stop();
-  engine.terminate();
+  router.terminate();
   const jobsToClear = [...jobs];
   jobsToClear.forEach((job) => removedJobIds.add(job.id));
   for (const job of jobsToClear) {
@@ -740,7 +747,7 @@ elements.clearButton.addEventListener("click", () => {
 elements.compressButton.addEventListener("click", startBatch);
 elements.cancelButton.addEventListener("click", () => {
   queue?.stop();
-  engine.cancelAll();
+  router.cancelAll();
   elements.cancelButton.hidden = true;
   toast("Compression cancelled. Your completed videos are still available.");
 });
@@ -759,7 +766,7 @@ window.addEventListener("beforeunload", () => {
       if (!removedJobIds.has(job.id)) putJob(serializeJob(job)).catch(() => {});
     }
   });
-  engine.terminate();
+  router.terminate();
   preview.revokeAll(jobs.map((job) => job.file));
   jobs.forEach((job) => job.outputUrl && URL.revokeObjectURL(job.outputUrl));
 });
@@ -791,6 +798,15 @@ async function checkStorage() {
 
 loadSavedJobs();
 checkStorage();
+
+router.select().then((selection) => {
+  elements.engineStatus.textContent =
+    selection.mode === "multithread-capable"
+      ? "FFmpeg · multithread ready"
+      : "FFmpeg · single-thread";
+}).catch(() => {
+  elements.engineStatus.textContent = "FFmpeg · single-thread";
+});
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {

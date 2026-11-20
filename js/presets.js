@@ -1,6 +1,7 @@
 export const presets = {
   high: {
     label: "High Quality",
+    mode: "quality",
     encoderPreset: "medium",
     crf: "18",
     maxRate: "12M",
@@ -9,6 +10,7 @@ export const presets = {
   },
   balanced: {
     label: "Balanced",
+    mode: "balanced",
     encoderPreset: "faster",
     crf: "23",
     maxRate: "5M",
@@ -17,7 +19,8 @@ export const presets = {
   },
   small: {
     label: "Smaller File",
-    encoderPreset: "faster",
+    mode: "fast",
+    encoderPreset: "veryfast",
     crf: "28",
     maxRate: "3M",
     bufSize: "5M",

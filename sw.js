@@ -1,4 +1,4 @@
-const CACHE_NAME = "litecompress-v2";
+const CACHE_NAME = "litecompress-v3";
 const APP_ASSETS = [
   "./",
   "./index.html",
@@ -15,6 +15,10 @@ const APP_ASSETS = [
   "./js/utils.js",
   "./js/persistence-store.js",
   "./js/checkpoint-store.js",
+  "./js/capability-detector.js",
+  "./js/performance-monitor.js",
+  "./js/webcodecs-engine.js",
+  "./js/processing-router.js",
   "./vendor/ffmpeg/ffmpeg.js",
   "./vendor/ffmpeg/classes.js",
   "./vendor/ffmpeg/const.js",
@@ -26,7 +30,10 @@ const APP_ASSETS = [
   "./vendor/util/const.js",
   "./vendor/util/errors.js",
   "./vendor/core/ffmpeg-core.js",
-  "./vendor/core/ffmpeg-core.wasm"
+  "./vendor/core/ffmpeg-core.wasm",
+  "./vendor/core/ffmpeg-core-mt.js",
+  "./vendor/core/ffmpeg-core-mt.wasm",
+  "./vendor/core/ffmpeg-core-mt.worker.js"
 ];
 
 self.addEventListener("install", (event) => {

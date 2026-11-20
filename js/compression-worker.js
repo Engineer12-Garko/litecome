@@ -10,10 +10,18 @@ async function loadFFmpeg() {
     ]);
     fetchFile = util.fetchFile;
     ffmpeg = new FFmpeg();
-    await ffmpeg.load({
-      coreURL: new URL("../vendor/core/ffmpeg-core.js", import.meta.url).href,
-      wasmURL: new URL("../vendor/core/ffmpeg-core.wasm", import.meta.url).href
-    });
+    if (globalThis.crossOriginIsolated && globalThis.SharedArrayBuffer) {
+      await ffmpeg.load({
+        coreURL: new URL("../vendor/core/ffmpeg-core-mt.js", import.meta.url).href,
+        wasmURL: new URL("../vendor/core/ffmpeg-core-mt.wasm", import.meta.url).href,
+        workerURL: new URL("../vendor/core/ffmpeg-core-mt.worker.js", import.meta.url).href
+      });
+    } else {
+      await ffmpeg.load({
+        coreURL: new URL("../vendor/core/ffmpeg-core.js", import.meta.url).href,
+        wasmURL: new URL("../vendor/core/ffmpeg-core.wasm", import.meta.url).href
+      });
+    }
   } catch (error) {
     ffmpeg = null;
     throw error;
@@ -47,6 +55,7 @@ async function compressSegment({ id, file, preset, segment }) {
       "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'",
       "-c:v", "libx264",
       "-preset", preset.encoderPreset || "faster",
+      "-threads", "0",
       "-crf", preset.crf,
       "-maxrate", preset.maxRate,
       "-bufsize", preset.bufSize,
@@ -158,6 +167,7 @@ self.onmessage = async (event) => {
       "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'",
       "-c:v", "libx264",
       "-preset", preset.encoderPreset || "faster",
+      "-threads", "0",
       "-crf", preset.crf,
       "-maxrate", preset.maxRate,
       "-bufsize", preset.bufSize,
