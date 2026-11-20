@@ -1,0 +1,16 @@
+@media (max-width: 700px) {
+  .topbar { height: 64px; padding: 0 18px; }
+  .privacy-pill { font-size: 11px; }
+  .shell { padding: 42px 16px 36px; }
+  .hero h1 { font-size: clamp(42px, 13vw, 58px); }
+  .hero-copy { font-size: 15px; margin-bottom: 28px; }
+  .drop-zone { min-height: 220px; }
+  .workspace { margin-top: 28px; }
+  .settings-row { grid-template-columns: 1fr; }
+  .job-card { grid-template-columns: 82px minmax(0, 1fr); min-height: 108px; }
+  .video-preview { width: 82px; height: 82px; }
+  .job-actions { grid-column: 1 / -1; flex-direction: row; justify-content: flex-end; margin-top: -4px; }
+  .size-comparison { flex-wrap: wrap; }
+  footer { margin: 0 16px; padding: 14px 0; }
+  footer p:last-child { display: none; }
+}
