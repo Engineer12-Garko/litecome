@@ -7,10 +7,12 @@
   .drop-zone { min-height: 220px; }
   .workspace { margin-top: 28px; }
   .settings-row { grid-template-columns: 1fr; }
+  .batch-actions { display: grid; grid-template-columns: 1fr auto; }
   .job-card { grid-template-columns: 82px minmax(0, 1fr); min-height: 108px; }
   .video-preview { width: 82px; height: 82px; }
   .job-actions { grid-column: 1 / -1; flex-direction: row; justify-content: flex-end; margin-top: -4px; }
   .size-comparison { flex-wrap: wrap; }
+  .preview-grid { grid-template-columns: 1fr; }
   footer { margin: 0 16px; padding: 14px 0; }
   footer p:last-child { display: none; }
 }

@@ -18,3 +18,7 @@ Because the application uses ES modules and a Web Worker, open it through HTTP r
 - Render service: **Static Site**
 - Build command: leave empty.
 - Publish directory: `.` (repository root).
+
+## Privacy and assets
+
+LiteCompress loads vendored FFmpeg.wasm assets locally and sends no video content to an application server.

@@ -69,6 +69,16 @@
   letter-spacing: 0;
 }
 .batch-actions { display: flex; }
+.cancel-button {
+  height: 66px;
+  margin-left: 10px;
+  padding: 0 18px;
+  border: 1px solid rgba(255,107,122,.45);
+  border-radius: 12px;
+  color: #ffadb5;
+  background: rgba(255,107,122,.08);
+  font-weight: 700;
+}
 .primary-button {
   width: 100%;
   height: 66px;
@@ -122,6 +132,7 @@
 .job-meta strong { color: #cbd3df; }
 .size-comparison { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; }
 .saved { color: var(--green); }
+.saved.warning { color: #f3be67; }
 .progress-wrap { margin-top: 12px; }
 .progress-track { height: 5px; overflow: hidden; border-radius: 99px; background: #252b38; }
 .progress-bar {
@@ -160,6 +171,79 @@
   align-items: center;
   font-size: 12px;
   font-weight: 700;
+}
+
+.preview-button {
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0 11px;
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+.preview-button:hover { color: white; border-color: #4b5570; }
+
+.preview-modal[hidden] { display: none; }
+.preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.preview-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(4,6,10,.78);
+  backdrop-filter: blur(8px);
+}
+.preview-modal-panel {
+  position: relative;
+  width: min(980px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(0,0,0,.48);
+  padding: 18px;
+}
+.preview-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.preview-modal-header h2 {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+}
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.preview-grid section p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.preview-grid video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  border-radius: 10px;
+  background: #05070a;
 }
 
 .toast-region {

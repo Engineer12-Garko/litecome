@@ -161,3 +161,4 @@ footer {
 footer p { display: flex; align-items: center; gap: 8px; }
 
 [hidden] { display: none !important; }
+.modal-open { overflow: hidden; }

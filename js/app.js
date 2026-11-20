@@ -14,13 +14,19 @@ const elements = {
   clearButton: document.querySelector("#clearButton"),
   presetSelect: document.querySelector("#presetSelect"),
   compressButton: document.querySelector("#compressButton"),
+  cancelButton: document.querySelector("#cancelButton"),
   jobList: document.querySelector("#jobList"),
-  toastRegion: document.querySelector("#toastRegion")
+  toastRegion: document.querySelector("#toastRegion"),
+  previewModal: document.querySelector("#previewModal"),
+  previewTitle: document.querySelector("#previewTitle"),
+  originalPreview: document.querySelector("#originalPreview"),
+  compressedPreview: document.querySelector("#compressedPreview")
 };
 
 const preview = new PreviewManager();
 const engine = new CompressionEngine();
 const jobs = [];
+const inFlightFiles = new Set();
 let queue = null;
 
 function toast(message, type = "") {
@@ -36,16 +42,26 @@ function readMetadata(file) {
     const url = preview.create(file);
     const video = document.createElement("video");
     video.preload = "metadata";
+    let settled = false;
+    const finish = (metadata) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(metadata);
+      video.removeAttribute("src");
+      video.load();
+    };
+    const timeout = setTimeout(() => {
+      finish({ duration: null, width: null, height: null });
+    }, 15000);
     video.onloadedmetadata = () => {
-      resolve({
+      finish({
         duration: Number.isFinite(video.duration) ? video.duration : null,
         width: video.videoWidth || null,
         height: video.videoHeight || null
       });
-      video.removeAttribute("src");
-      video.load();
     };
-    video.onerror = () => resolve({ duration: null, width: null, height: null });
+    video.onerror = () => finish({ duration: null, width: null, height: null });
     video.src = url;
   });
 }
@@ -64,10 +80,6 @@ function formatDuration(seconds) {
 function renderJob(job) {
   const card = document.querySelector(`[data-job-id="${job.id}"]`);
   if (!card) return;
-  if (job.status === "complete") {
-    const previewVideo = card.querySelector(".video-preview");
-    previewVideo.src = job.outputUrl;
-  }
   card.querySelector(".progress-bar").style.width = `${job.progress}%`;
   card.querySelector(".progress-bar").classList.toggle("animated", job.status === "processing");
   card.querySelector(".progress-text").textContent =
@@ -77,10 +89,17 @@ function renderJob(job) {
 
   if (job.status === "complete") {
     const comparison = card.querySelector(".size-comparison");
-    const reduction = job.originalSize > 0 ? Math.max(0, Math.round((1 - job.outputSize / job.originalSize) * 100)) : 0;
+    const reduction = job.originalSize > 0
+      ? Math.round((1 - job.outputSize / job.originalSize) * 100)
+      : 0;
+    const sizeLabel = reduction > 0
+      ? `<span class="saved">${reduction}% smaller</span>`
+      : reduction < 0
+        ? `<span class="saved warning">${Math.abs(reduction)}% larger</span>`
+        : `<span>Same size</span>`;
     comparison.innerHTML =
       `<span>${formatBytes(job.originalSize)}</span><span>→</span><strong>${formatBytes(job.outputSize)}</strong>` +
-      `<span class="saved">${reduction}% smaller</span>`;
+      sizeLabel;
   }
 
   if (job.status === "error") {
@@ -96,36 +115,47 @@ function renderJob(job) {
     link.textContent = "Download";
     actions.prepend(link);
   }
+  if (!actions.querySelector(".preview-button")) {
+    const previewButton = document.createElement("button");
+    previewButton.className = "preview-button";
+    previewButton.type = "button";
+    previewButton.textContent = "Preview";
+    previewButton.addEventListener("click", () => openPreview(job));
+    actions.append(previewButton);
+  }
 }
 
 async function addFiles(files) {
   const known = new Set(jobs.map((job) => `${job.file.name}:${job.file.size}:${job.file.lastModified}`));
+  const additions = [];
   let accepted = 0;
 
   for (const file of files) {
     const key = `${file.name}:${file.size}:${file.lastModified}`;
-    if (known.has(key)) continue;
+    if (known.has(key) || inFlightFiles.has(key)) continue;
     known.add(key);
+    inFlightFiles.add(key);
     accepted++;
-
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     file.__jobId = id;
-    const metadata = await readMetadata(file);
-    const job = {
-      id,
-      file,
-      status: "queued",
-      progress: 0,
-      originalSize: file.size,
-      outputSize: null,
-      outputUrl: null,
-      outputBlob: null,
-      error: null,
-      ...metadata
-    };
-    jobs.push(job);
+    additions.push(
+      readMetadata(file).then((metadata) => ({
+        id,
+        file,
+        status: "queued",
+        progress: 0,
+        originalSize: file.size,
+        outputSize: null,
+        outputUrl: null,
+        outputBlob: null,
+        error: null,
+        ...metadata
+      })).finally(() => inFlightFiles.delete(key))
+    );
   }
 
+  const addedJobs = await Promise.all(additions);
+  jobs.push(...addedJobs);
   if (accepted) {
     elements.workspace.hidden = false;
     renderAllJobs();
@@ -177,6 +207,7 @@ function removeJob(id) {
   const index = jobs.findIndex((job) => job.id === id);
   if (index < 0) return;
   const [job] = jobs.splice(index, 1);
+  if (job.status === "processing") engine.cancel(id);
   if (job.outputUrl) URL.revokeObjectURL(job.outputUrl);
   preview.revoke(job.file);
   if (!jobs.length) {
@@ -186,16 +217,44 @@ function removeJob(id) {
   }
 }
 
-async function processJob(job) {
+function openPreview(job) {
+  elements.previewTitle.textContent = job.file.name;
+  elements.originalPreview.src = preview.create(job.file);
+  elements.originalPreview.load();
+  elements.compressedPreview.removeAttribute("src");
+  if (job.outputUrl) {
+    elements.compressedPreview.src = job.outputUrl;
+  }
+  elements.compressedPreview.load();
+  elements.previewModal.hidden = false;
+  document.body.classList.add("modal-open");
+  elements.previewModal.querySelector(".preview-modal-header [data-close-preview]").focus();
+}
+
+function closePreview() {
+  elements.previewModal.hidden = true;
+  document.body.classList.remove("modal-open");
+  elements.originalPreview.pause();
+  elements.compressedPreview.pause();
+  elements.originalPreview.removeAttribute("src");
+  elements.compressedPreview.removeAttribute("src");
+  elements.originalPreview.load();
+  elements.compressedPreview.load();
+}
+
+async function processJob(job, preset) {
   job.status = "processing";
   job.progress = 0;
   renderJob(job);
   try {
-    const result = await engine.compress(job.file, presets[elements.presetSelect.value], (message) => {
+    const result = await engine.compress(job.file, preset, (message) => {
       if (message.id !== job.id) return;
       if (message.type === "progress") {
-        job.progress = message.progress;
-        renderJob(job);
+        const nextProgress = Math.max(job.progress, Math.min(100, message.progress));
+        if (nextProgress !== job.progress) {
+          job.progress = nextProgress;
+          renderJob(job);
+        }
       }
     });
     job.outputBlob = result.blob;
@@ -205,8 +264,13 @@ async function processJob(job) {
     job.status = "complete";
     job.progress = 100;
   } catch (error) {
-    job.status = "error";
-    job.error = error.message || "Compression failed.";
+    if (error?.name === "AbortError") {
+      job.status = "queued";
+      job.progress = 0;
+    } else {
+      job.status = "error";
+      job.error = error.message || "Compression failed.";
+    }
   }
   renderJob(job);
 }
@@ -221,12 +285,16 @@ async function startBatch() {
 
   elements.compressButton.disabled = true;
   elements.compressButton.querySelector("span").textContent = "Compressing...";
-  queue = new JobQueue(processJob);
+  elements.cancelButton.hidden = false;
+  const batchPreset = { ...presets[elements.presetSelect.value] };
+  queue = new JobQueue((job) => processJob(job, batchPreset));
   queue.setJobs(jobs);
   await queue.run(renderJob);
   elements.compressButton.disabled = false;
   elements.compressButton.querySelector("span").textContent = "Compress all";
+  elements.cancelButton.hidden = true;
 
+  if (queue.cancelled) return;
   const failures = jobs.filter((job) => job.status === "error").length;
   if (failures) toast(`${failures} video${failures === 1 ? "" : "s"} could not be compressed.`, "error");
   else toast("Batch compression complete.");
@@ -236,6 +304,7 @@ const fileManager = new FileManager(addFiles, (message) => toast(message, "error
 fileManager.bind(elements.fileInput, elements.dropZone, elements.browseButton);
 
 elements.clearButton.addEventListener("click", () => {
+  queue?.stop();
   engine.terminate();
   for (const job of jobs) {
     preview.revoke(job.file);
@@ -246,9 +315,24 @@ elements.clearButton.addEventListener("click", () => {
   elements.workspace.hidden = true;
   elements.compressButton.disabled = false;
   elements.compressButton.querySelector("span").textContent = "Compress all";
+  elements.cancelButton.hidden = true;
 });
 
 elements.compressButton.addEventListener("click", startBatch);
+elements.cancelButton.addEventListener("click", () => {
+  queue?.stop();
+  engine.cancelAll();
+  elements.cancelButton.hidden = true;
+  toast("Compression cancelled. Your completed videos are still available.");
+});
+
+elements.previewModal.querySelectorAll("[data-close-preview]").forEach((element) => {
+  element.addEventListener("click", closePreview);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.previewModal.hidden) closePreview();
+});
+
 window.addEventListener("beforeunload", () => {
   engine.terminate();
   preview.revokeAll(jobs.map((job) => job.file));
