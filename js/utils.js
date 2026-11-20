@@ -24,3 +24,36 @@ export function safeOutputName(name) {
 export function isLikelyVideo(file) {
   return file.type?.startsWith("video/") || /\.(mp4|mov|m4v|webm|mkv|avi|mpeg|mpg|3gp)$/i.test(file.name);
 }
+
+export async function fingerprintFile(file) {
+  if (!globalThis.crypto?.subtle || !file?.slice) return null;
+  const size = Math.min(file.size, 2 * 1024 * 1024);
+  const parts = [
+    file.slice(0, size),
+    file.size > size ? file.slice(Math.max(0, file.size - size), file.size) : null
+  ].filter(Boolean);
+  const chunks = await Promise.all(parts.map((part) => part.arrayBuffer()));
+  const combined = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(new Uint8Array(chunk), offset);
+    offset += chunk.byteLength;
+  }
+  const digest = await crypto.subtle.digest("SHA-256", combined);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function estimateOutputSize(fileSize, duration, presetKey, history = []) {
+  const ratioByPreset = { high: 0.72, balanced: 0.52, small: 0.36 };
+  const relevant = history.filter((entry) => entry.preset === presetKey && entry.originalSize && entry.outputSize);
+  if (relevant.length) {
+    const ratios = relevant.slice(-8).map((entry) => entry.outputSize / entry.originalSize);
+    const ratio = ratios.reduce((sum, value) => sum + value, 0) / ratios.length;
+    const low = Math.max(0.05, ratio * 0.75) * fileSize;
+    const high = ratio * 1.25 * fileSize;
+    return { low, high };
+  }
+  const base = ratioByPreset[presetKey] || 0.52;
+  const durationFactor = duration ? Math.max(0.75, Math.min(1.25, duration / 600)) : 1;
+  return { low: fileSize * base * durationFactor * 0.75, high: fileSize * base * durationFactor * 1.25 };
+}

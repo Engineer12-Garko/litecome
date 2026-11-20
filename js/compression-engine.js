@@ -9,10 +9,10 @@ export class CompressionEngine {
     if (this.worker) return this.worker;
     this.worker = new Worker("./js/compression-worker.js", { type: "module" });
     this.worker.onmessage = (event) => {
-      onProgress(event.data);
       const pending = this.pending.get(event.data.id);
+      pending?.onProgress?.(event.data);
       if (!pending) return;
-      if (event.data.type === "complete") {
+      if (event.data.type === "complete" || event.data.type === "segmentComplete") {
         this.pending.delete(event.data.id);
         pending.resolve(event.data);
       } else if (event.data.type === "error") {
@@ -33,13 +33,36 @@ export class CompressionEngine {
   compress(file, preset, onProgress) {
     return new Promise((resolve, reject) => {
       const worker = this.ensureWorker(onProgress);
-      this.pending.set(file.__jobId, { resolve, reject });
+      this.pending.set(file.__jobId, { resolve, reject, onProgress });
       worker.postMessage({
         id: file.__jobId,
         type: "compress",
         file,
         preset
       });
+    });
+  }
+
+  compressSegment(file, preset, segment, onProgress) {
+    return new Promise((resolve, reject) => {
+      const worker = this.ensureWorker(onProgress);
+      this.pending.set(segment.id, { resolve, reject, onProgress });
+      worker.postMessage({
+        id: segment.id,
+        type: "compressSegment",
+        file,
+        preset,
+        segment
+      });
+    });
+  }
+
+  assemble(jobId, segmentCount, onProgress) {
+    return new Promise((resolve, reject) => {
+      const id = `assemble-${jobId}`;
+      const worker = this.ensureWorker(onProgress);
+      this.pending.set(id, { resolve, reject, onProgress });
+      worker.postMessage({ id, type: "assemble", jobId, segmentCount });
     });
   }
 
